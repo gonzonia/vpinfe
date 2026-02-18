@@ -6,3 +6,6 @@
 # PyInstaller build directories
 build/
 dist/
+.DS_Store
+managerui/.DS_Store
+web/.DS_Store
