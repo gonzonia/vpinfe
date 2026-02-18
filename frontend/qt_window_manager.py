@@ -24,6 +24,8 @@ import urllib.request
 import urllib.error
 import queue
 import asyncio
+import os
+import subprocess
 
 from typing import Optional
 
@@ -99,18 +101,18 @@ class _VPinWindow(QWebEngineView):
         self._url = url
         self.manager_ui_port = manager_ui_port
 
+        # DebugPage hook
         self.setPage(_DebugPage(name, self))
 
-        # contextMenuRequested is a signal on QWebEngineView
-        from PySide6.QtCore import Qt  # Ensure Qt is imported
-
-        # 1. Tell Qt we want to handle the menu ourselves
+        # --- CONTEXT MENU SETUP ---
+        from PySide6.QtCore import Qt
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-
-        # 2. Connect the correct signal
         self.customContextMenuRequested.connect(self._show_context_menu)
+        
+        # Allow JS window.close() to work (for the Exit prompt on the main window)
+        self.page().windowCloseRequested.connect(self.close)
 
-        # Enable everything the themes need, matching original chromium_manager flags
+        # --- SETTINGS ---
         s = self.settings()
         s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
@@ -120,6 +122,7 @@ class _VPinWindow(QWebEngineView):
         s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, False)
         s.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)
 
+        # --- GEOMETRY & STYLE ---
         self.setWindowTitle(f"VPinFE - {name}")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowFlags(
@@ -130,6 +133,9 @@ class _VPinWindow(QWebEngineView):
         self.setStyleSheet("background: black;")
         self.setGeometry(x, y, width, height)
         self.showFullScreen()
+
+        # Place to store the manager dialog ref
+        self._manager_dialog = None
 
     def load_url(self):
         print(f"[QtWindowManager] Loading '{self.name}': {self._url}")
@@ -147,63 +153,7 @@ class _VPinWindow(QWebEngineView):
         """Creates a right-click menu to control the app."""
         menu = QMenu(self)
 
-        # ---------------------------------------------------------
-        # 1. FIX THE "BLACK BOX" STYLE
-        # Force the menu to use standard colors regardless of macOS Dark Mode
-        # ---------------------------------------------------------
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #F0F0F0; /* Light Grey Background */
-                color: black;              /* Black Text */
-                border: 1px solid #999999;
-                padding: 4px;
-            }
-            QMenu::item {
-                padding: 4px 24px;
-                background-color: transparent;
-            }
-            QMenu::item:selected { 
-                background-color: #0078D7; /* Blue Highlight */
-                color: white;              /* White Text on Highlight */
-            }
-        """)
-
-        # ---------------------------------------------------------
-        # 2. DEFINE ACTIONS
-        # ---------------------------------------------------------
-        
-        # Action: Reload
-        reload_action = menu.addAction("Reload Window")
-        reload_action.triggered.connect(self.reload)
-
-        # Action: Open Manager
-        manager_action = menu.addAction("Open Manager")
-        # Now calls our internal modal dialog method
-        manager_action.triggered.connect(self._open_manager)
-
-        menu.addSeparator()
-
-        # Action: Quit
-        quit_action = menu.addAction("Quit VPinFE")
-        # Connect to the global app quit slot
-        quit_action.triggered.connect(QApplication.instance().quit)
-
-        # ---------------------------------------------------------
-        # 3. SHOW MENU
-        # ---------------------------------------------------------
-        # Map local widget coordinates to global screen coordinates
-        global_point = self.mapToGlobal(point)
-        menu.exec(global_point)
-        
-    def closeEvent(self, event):
-        print(f"[Qt] Closing window: {self.name}")
-        event.accept()  # Crucial: Tells Qt to proceed with closing
-        
-    def _show_manager_context_menu(self, point):
-        """Show a context menu for the Manager Popup."""
-        menu = QMenu(self._manager_view)
-
-        # 1. Apply the same clean style (Light Grey)
+        # 1. STYLE
         menu.setStyleSheet("""
             QMenu {
                 background-color: #F0F0F0;
@@ -216,27 +166,37 @@ class _VPinWindow(QWebEngineView):
                 background-color: transparent;
             }
             QMenu::item:selected { 
-                background-color: #B00020; /* Red for Close */
+                background-color: #0078D7;
                 color: white;
             }
         """)
 
-        # 2. Add 'Close' Action
-        close_action = menu.addAction("Close Manager")
-        close_action.triggered.connect(self._manager_dialog.close)
-        
-        # 3. Add 'Reload' (Just in case it gets stuck)
-        reload_action = menu.addAction("Reload Page")
-        reload_action.triggered.connect(self._manager_view.reload)
+        # 2. ACTIONS
+        reload_action = menu.addAction("Reload Window")
+        reload_action.triggered.connect(self.reload)
 
-        # 4. Show Menu
-        global_point = self._manager_view.mapToGlobal(point)
-        menu.exec(global_point)
+        # Action: Open Manager
+        manager_action = menu.addAction("Open Manager")
+        manager_action.triggered.connect(self._open_manager)
+
+        menu.addSeparator()
+
+        quit_action = menu.addAction("Quit VPinFE")
+        quit_action.triggered.connect(QApplication.instance().quit)
+
+        # 3. EXECUTE
+        global_point = self.mapToGlobal(point)
+        menu.exec_(global_point)
         
+    def closeEvent(self, event):
+        print(f"[Qt] Closing window: {self.name}")
+        event.accept()  # Crucial: Tells Qt to proceed with closing
+        
+            
     def _open_manager(self):
         """Opens the Manager UI in a modal overlay window."""
         # 1. Prevent opening multiple manager windows
-        if hasattr(self, '_manager_dialog') and self._manager_dialog.isVisible():
+        if hasattr(self, '_manager_dialog') and self._manager_dialog and self._manager_dialog.isVisible():
             self._manager_dialog.raise_()
             self._manager_dialog.activateWindow()
             return
@@ -250,8 +210,6 @@ class _VPinWindow(QWebEngineView):
         self._manager_dialog.setFocusPolicy(Qt.StrongFocus)
         
         # 3. CRITICAL: Use WindowModal
-        # This blocks input to the game window (Modal)
-        # BUT allows Python background threads to keep running
         self._manager_dialog.setWindowModality(Qt.WindowModality.WindowModal)
 
         # 4. Create Layout
@@ -260,11 +218,19 @@ class _VPinWindow(QWebEngineView):
         
         # 5. Create View (Keep a reference with 'self')
         self._manager_view = QWebEngineView()
+        
+        # Ensure window.close() from JS closes the dialog (Added this so the Exit button works inside the modal)
+        self._manager_view.page().windowCloseRequested.connect(self._manager_dialog.accept)
+        
+        # Enable context menu inside the manager
         self._manager_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self._manager_view.customContextMenuRequested.connect(self._show_manager_context_menu)
         
-        # --- REMOVED THE DEBUG SETTING THAT CAUSED THE CRASH ---
-        # If we need this later, we can enable it via command line flags instead.
+        # Enable settings for the manager view
+        s = self._manager_view.settings()
+        s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        s.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
+        s.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
         
         # Debug: Print when the page actually loads
         def on_load_finished(ok):
@@ -283,6 +249,50 @@ class _VPinWindow(QWebEngineView):
         
         # Use show() instead of exec() to prevent freezing the server
         self._manager_dialog.show()
+
+    def _show_manager_context_menu(self, point):
+        """Context menu specifically for the Manager Modal."""
+        menu = QMenu(self._manager_dialog)
+        
+        menu.setStyleSheet("""
+            QMenu { background-color: #F0F0F0; color: black; border: 1px solid #999999; padding: 4px; }
+            QMenu::item { padding: 4px 24px; background-color: transparent; }
+            QMenu::item:selected { background-color: #0078D7; color: white; }
+        """)
+
+        reload_action = menu.addAction("Reload Manager")
+        reload_action.triggered.connect(self._manager_view.reload)
+
+        close_action = menu.addAction("Close Manager")
+        
+        # --- FIX: Trigger the SMART close, NOT the force close ---
+        # previously this was: self._manager_dialog.accept (WRONG)
+        close_action.triggered.connect(self._request_manager_smart_close)
+        
+        menu.exec_(self._manager_view.mapToGlobal(point))
+
+    def _request_manager_smart_close(self):
+        """
+        Runs JS inside the MANAGER view to click the 'main-exit-btn'.
+        """
+        script = """
+        (function() {
+            var btn = document.getElementById('main-exit-btn');
+            if (btn) {
+                btn.click();
+                return true;
+            }
+            return false;
+        })();
+        """
+        # Execute JS on the MANAGER view (self._manager_view), not the game window
+        self._manager_view.page().runJavaScript(script, self._handle_manager_smart_close_result)
+
+    def _handle_manager_smart_close_result(self, result):
+        # If the button wasn't found (maybe UI error), fall back to force close
+        if result is False:
+            print("[Qt] Exit button not found in Manager, force closing.")
+            self._manager_dialog.accept()
         
 
     def _return_home(self):
@@ -294,7 +304,46 @@ class _VPinWindow(QWebEngineView):
             ".catch(function(e) { console.error('Return home failed:', e); })"
         )
 
+    def _request_smart_close(self):
+        """Injects JS to find and click the 'main-exit-btn'."""
+        script = """
+        (function() {
+            var btn = document.getElementById('main-exit-btn');
+            if (btn) {
+                btn.click();
+                return true;
+            }
+            return false;
+        })();
+        """
+        self.page().runJavaScript(script, self._handle_smart_close_result)
 
+    def _handle_smart_close_result(self, result):
+        if result is False:
+            print(f"[Qt] 'main-exit-btn' not found on {self.name}, closing natively.")
+            self.close()
+
+    def keyPressEvent(self, event):
+        """
+        Intercepts key presses. If ESC is pressed, HARD KILL the app.
+        Standard quit() hangs because background threads (NiceGUI) stay alive.
+        """
+        if event.key() == Qt.Key_Escape:
+            print(f"[Qt] ESC pressed on {self.name}. Force Exiting...")
+            
+            # Close the manager dialog if it happens to be open
+            if hasattr(self, '_manager_dialog') and self._manager_dialog:
+                try:
+                    self._manager_dialog.accept()
+                except:
+                    pass
+
+            # FORCE EXIT: Bypasses cleanup of background threads that cause the hang
+            import os
+            os._exit(0) 
+        else:
+            # Pass other keys to the browser
+            super().keyPressEvent(event)
 # ---------------------------------------------------------------------------
 # Manager - drop-in replacement for ChromiumManager
 # ---------------------------------------------------------------------------
@@ -408,16 +457,17 @@ class QtWindowManager:
         QTimer.singleShot(200, self._load_all)
         
     def terminate_all(self) -> None:
-        """Close all windows. Equivalent to ChromiumManager.terminate_all."""
-        print("[QtWindowManager] Terminating all windows...")
-        for win in list(self._windows):
-            try:
-                win.close()
-            except Exception as e:
-                print(f"[QtWindowManager] Error closing '{win.name}': {e}")
-        self._windows.clear()
-        self._exit_event.set()
-        print("[QtWindowManager] All windows closed.")
+        """Forcefully kills the process immediately."""
+        print("[QtWindowManager] Terminating process (Nuclear Option)...")
+        
+        # DEADLOCK FIX: Do NOT call win.close() here.
+        # If this function is called from a background thread, win.close()
+        # will hang the application indefinitely. 
+        # Since we are calling os._exit(0), the OS will clean up the windows for us.
+
+        import os
+        os._exit(0)
+        os._exit(0)
 
     def wait_for_exit(self) -> None:
         """Block main thread until app quits."""
@@ -471,22 +521,31 @@ class QtWindowManager:
             if win.name == 'table':
                 table_window = win
         
-        # Force focus to the table window so Gamepads work immediately
         if table_window:
-            setup_native_dialogs(table_window) # This connects the bridge
+            # UPDATE THIS LINE to pass self._windows
+            setup_native_dialogs(table_window, self._windows)
+            
             table_window.raise_()
             table_window.activateWindow()
             table_window.setFocus()
+            
 # ---------------------------------------------------------------------------
-# Native Dialog Bridge (Async Version)
+# Native Bridge (Dialogs + Reload + Restart)
 # ---------------------------------------------------------------------------
 class _DialogWorker(QObject):
     request_signal = Signal(str, object) 
+    reload_signal = Signal()
+    restart_signal = Signal()  # <--- New Signal
 
-    def __init__(self, parent_window):
+    def __init__(self, parent_window, all_windows): 
         super().__init__()
         self.parent_window = parent_window
+        self.all_windows = all_windows
+        
+        # Connect signals to Main Thread slots
         self.request_signal.connect(self._show_dialog)
+        self.reload_signal.connect(self._reload_all)
+        self.restart_signal.connect(self._perform_restart)
 
     def _show_dialog(self, mode, callback):
         path = ""
@@ -497,28 +556,54 @@ class _DialogWorker(QObject):
                 path, _ = QFileDialog.getOpenFileName(self.parent_window, "Select File")
         except Exception as e:
             print(f"[Qt] Dialog Error: {e}")
-        
-        # Send the result back to the waiting async function
         callback(path)
+
+    def _reload_all(self):
+        print("[Qt] Force reloading all windows...")
+        for win in self.all_windows:
+            try:
+                win.browser.triggerPageAction(QWebEnginePage.WebAction.ReloadAndBypassCache)
+            except Exception as e:
+                print(f"[Qt] Error reloading {win.name}: {e}")
+
+    def _perform_restart(self):
+        """Executed on Main Thread: Spawns new process and kills current one."""
+        print("[Qt] Restart Signal Received. Spawning new process...")
+        
+        # 1. Spawn new process independent of this one
+        subprocess.Popen([sys.executable] + sys.argv)
+        
+        # 2. Hard Kill this process
+        print("[Qt] Exiting current process now.")
+        os._exit(0)
+
+# --- Global Bridge & Helpers ---
 
 _global_dialog_bridge = None
 
-def setup_native_dialogs(main_window):
+def setup_native_dialogs(main_window, all_windows):
     global _global_dialog_bridge
-    _global_dialog_bridge = _DialogWorker(main_window)
-    print("[Qt] Native dialog bridge initialized.")
+    _global_dialog_bridge = _DialogWorker(main_window, all_windows)
+    print("[Qt] Bridge initialized (Dialogs + Reload + Restart).")
+
+def trigger_app_reload():
+    if _global_dialog_bridge:
+        _global_dialog_bridge.reload_signal.emit()
+
+def trigger_app_restart():
+    """Safe to call from NiceGUI background thread."""
+    if _global_dialog_bridge:
+        # Emit signal so the Main Thread handles the restart
+        _global_dialog_bridge.restart_signal.emit()
+    else:
+        print("[Qt] Error: Cannot restart, bridge not ready.")
 
 async def pick_native_path(mode='folder'):
     if not _global_dialog_bridge:
-        print("[Qt] Error: Bridge not initialized. Did 'table' window load?")
         return None
-
     loop = asyncio.get_running_loop()
     future = loop.create_future()
-    
-    def on_done(result):
-        # Safely return the result to the NiceGUI thread
+    def callback(result):
         loop.call_soon_threadsafe(future.set_result, result)
-
-    _global_dialog_bridge.request_signal.emit(mode, on_done)
+    _global_dialog_bridge.request_signal.emit(mode, callback)
     return await future
