@@ -23,7 +23,7 @@ from pathlib import Path
 from frontend.customhttpserver import CustomHTTPServer
 from frontend.api import API
 from frontend.ws_bridge import WebSocketBridge
-from frontend.chromium_manager import ChromiumManager
+from frontend.qt_window_manager import QtWindowManager as ChromiumManager
 from common.iniconfig import IniConfig
 from clioptions import parseArgs
 from managerui.managerui import start_manager_ui, stop_manager_ui

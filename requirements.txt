@@ -7,5 +7,7 @@ pynput
 nicegui
 platformdirs
 
-# Platform-specific dependencies (installed conditionally)
-# pyobjc; sys_platform == "darwin"
+# Self-contained Chromium window (replaces system Chrome dependency)
+# PySide6 bundles WebEngine - no separate package needed
+# LGPL licensed (vs PyQt6 which is GPL)
+PySide6>=6.6.0

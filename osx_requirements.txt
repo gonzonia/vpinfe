@@ -5,4 +5,9 @@ olefile
 pynput
 nicegui
 platformdirs
+
+# Self-contained Chromium window (replaces system Chrome dependency)
+PySide6>=6.6.0
+
+# macOS system integration (notifications, dock icon, etc.)
 pyobjc; sys_platform == "darwin"
