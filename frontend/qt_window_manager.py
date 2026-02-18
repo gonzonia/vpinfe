@@ -22,13 +22,14 @@ import time
 import threading
 import urllib.request
 import urllib.error
+import queue
 
 from typing import Optional
 
 
-from PySide6.QtCore import Qt, QUrl, QTimer
+from PySide6.QtCore import Qt, QUrl, QTimer, Signal, QObject  
 from PySide6.QtGui import QDesktopServices, QAction
-from PySide6.QtWidgets import QApplication, QMenu, QDialog, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QMenu, QDialog, QVBoxLayout, QFileDialog 
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage, QWebEngineContextMenuRequest
 
@@ -359,7 +360,17 @@ class QtWindowManager:
             if not screen_id_str:
                 continue
 
-            screen_id = int(screen_id_str)
+            # --- SANITIZATION START: Prevent 'False' from hanging the splash screen ---
+            if screen_id_str in ['False', 'None', 'True']:
+                screen_id = 0
+            else:
+                try:
+                    screen_id = int(screen_id_str)
+                except ValueError:
+                    print(f"[QtWindowManager] Warning: Invalid ID '{screen_id_str}' for {win_name}. Using 0.")
+                    screen_id = 0
+            # --- SANITIZATION END ---
+
             if monitors and screen_id >= len(monitors):
                 print(
                     f"[QtWindowManager] Warning: {config_key}={screen_id} "
@@ -394,7 +405,7 @@ class QtWindowManager:
 
         # Load URLs once the Qt event loop is actually running
         QTimer.singleShot(200, self._load_all)
-
+        
     def terminate_all(self) -> None:
         """Close all windows. Equivalent to ChromiumManager.terminate_all."""
         print("[QtWindowManager] Terminating all windows...")
@@ -461,6 +472,52 @@ class QtWindowManager:
         
         # Force focus to the table window so Gamepads work immediately
         if table_window:
+            setup_native_dialogs(table_window) # This connects the bridge
             table_window.raise_()
             table_window.activateWindow()
             table_window.setFocus()
+# ---------------------------------------------------------------------------
+# Native Dialog Bridge (Async Version)
+# ---------------------------------------------------------------------------
+class _DialogWorker(QObject):
+    request_signal = Signal(str, object) 
+
+    def __init__(self, parent_window):
+        super().__init__()
+        self.parent_window = parent_window
+        self.request_signal.connect(self._show_dialog)
+
+    def _show_dialog(self, mode, callback):
+        path = ""
+        try:
+            if mode == 'folder':
+                path = QFileDialog.getExistingDirectory(self.parent_window, "Select Directory")
+            else:
+                path, _ = QFileDialog.getOpenFileName(self.parent_window, "Select File")
+        except Exception as e:
+            print(f"[Qt] Dialog Error: {e}")
+        
+        # Send the result back to the waiting async function
+        callback(path)
+
+_global_dialog_bridge = None
+
+def setup_native_dialogs(main_window):
+    global _global_dialog_bridge
+    _global_dialog_bridge = _DialogWorker(main_window)
+    print("[Qt] Native dialog bridge initialized.")
+
+async def pick_native_path(mode='folder'):
+    if not _global_dialog_bridge:
+        print("[Qt] Error: Bridge not initialized. Did 'table' window load?")
+        return None
+
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    
+    def on_done(result):
+        # Safely return the result to the NiceGUI thread
+        loop.call_soon_threadsafe(future.set_result, result)
+
+    _global_dialog_bridge.request_signal.emit(mode, on_done)
+    return await future
