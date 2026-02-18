@@ -31,145 +31,8 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # 4a. Create Chromium directories (Linux/macOS)
-      - name: Create Chromium directories (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p chromium/linux chromium/windows chromium/mac
-        shell: bash
-
-      # 4b. Create Chromium directories (Windows)
-      - name: Create Chromium directories (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          New-Item -ItemType Directory -Force -Path chromium\linux,chromium\windows,chromium\mac
-
-      # 5. Download Linux Chromium
-      - name: Download Linux Chromium
-        if: runner.os == 'Linux'
-        run: |
-          wget -O chromium/linux/chrome.zip "https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Linux_x64%2F1568190%2Fchrome-linux.zip?generation=1768270474193258&alt=media"
-          #wget -O chromium/linux/chrome.zip "https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Linux_x64%2F1582450%2Fchrome-linux.zip?alt=media"
-          unzip -q chromium/linux/chrome.zip -d chromium/linux
-          mv chromium/linux/chrome-linux chromium/linux/chrome
-          chmod +x chromium/linux/chrome/chrome
-
-      # 6. Download Windows Chromium
-      - name: Download Windows Chromium
-        if: runner.os == 'Windows'
-        run: |
-          pwsh -Command "Invoke-WebRequest -Uri 'https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Win_x64%2F1568195%2Fchrome-win.zip?generation=1768274160162696&alt=media' -OutFile 'chromium/windows/chrome.zip' -UseBasicParsing"
-          #pwsh -Command "Invoke-WebRequest -Uri 'https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Win_x64%2F1582426%2Fchrome-win.zip?alt=media' -OutFile 'chromium/windows/chrome.zip' -UseBasicParsing"
-          pwsh -Command "Expand-Archive -Path 'chromium/windows/chrome.zip' -DestinationPath 'chromium/windows'"
-          pwsh -Command "Remove-Item 'chromium/windows/chrome.zip'"
-
-      # 7. Download Mac Chromium (ARM)
-      - name: Download Mac Chromium
-        if: runner.os == 'macOS'
-        run: |
-          mkdir -p chromium
-          curl -L -o chrome-mac.zip "https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Mac_Arm%2F1582847%2Fchrome-mac.zip?generation=1770766943434586&alt=media"
-          unzip -q chrome-mac.zip
-          mv chrome-mac/Chromium.app chromium/Chromium.app
-          rm -rf chrome-mac chrome-mac.zip
-
-      # 8. Build with PyInstaller
-      - name: Build app with PyInstaller
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            pyinstaller --onedir --noconfirm --name vpinfe \
-              --add-data "web:web" \
-              --add-data "managerui/static:managerui/static" \
-              --add-data "chromium/linux/chrome:chromium/linux/chrome" \
-              --hidden-import pynput.keyboard._xorg \
-              --hidden-import pynput.mouse._xorg \
-              main.py
-          elif [[ "$RUNNER_OS" == "Windows" ]]; then
-            pyinstaller --onedir --noconfirm --name vpinfe \
-              --add-data "web;web" \
-              --add-data "managerui/static;managerui/static" \
-              --add-data "chromium/windows;chromium/windows" \
-              main.py
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            pyinstaller --windowed -i icon/VPinFE.icns --osx-bundle-identifier com.vpinfe.main --noconfirm --name VPinFE \
-              --add-data "web:web" \
-              --add-data "managerui/static:managerui/static" \
-              main.py
-            # Preserve Chromium.app bundle structure (PyInstaller breaks symlinks)
-            mkdir -p dist/VPinFE.app/Contents/Frameworks/chromium
-            cp -R chromium/Chromium.app dist/VPinFE.app/Contents/Frameworks/chromium/Chromium.app
-            chmod +x dist/VPinFE.app/Contents/Frameworks/chromium/Chromium.app/Contents/MacOS/Chromium
-            #remove build directory
-            rm -rf dist/vpinfe
-          fi
-        shell: bash
-        
-      #9. Ad-hoc sign the app bundle
-      #    This prevents the "app is damaged" error and satisfies basic structural
-      #    signing requirements. Users will still need to allow the app via
-      #    System Settings > Privacy & Security > "Open Anyway" on first launch.
-      - name: Ad-hoc sign the app (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          codesign --force --deep --sign - dist/VPinFE.app
-          echo "Signing exit code: $?"
-          codesign --verify --verbose dist/VPinFE.app
-        shell: bash
-
-      #10. Remove extended attributes from the artifact before packaging
-      - name: Remove extended attributes (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          sudo xattr -rc dist
-          echo "xattr exit code: $?"
-        shell: bash
-      #11. Create DMG
-      - name: Install create-dmg
-        if: runner.os == 'macOS'
-        run: brew install create-dmg
-        shell: bash
-         
-      - name: Package as DMG (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          create-dmg \
-            --volname "VPinFE" \
-            --volicon "icon/VPinFE.icns" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
-            --icon-size 100 \
-            --icon "VPinFE.app" 175 190 \
-            --hide-extension "VPinFE.app" \
-            --app-drop-link 425 190 \
-            "dist/VPinFE.dmg" \
-            "dist/VPinFE.app"
-        shell: bash
-        
-       #12 Upload artifact
-      - name: Upload build artifact (macOS)
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: vpinfe-macOS
-          path: dist/VPinFE.dmg
-
-
-
-      # 13. Copy Windows launcher bat file
-      - name: Copy Windows launcher
-        if: runner.os == 'Windows'
-        run: cp vpinfe.bat dist/vpinfe/
-        shell: bash
-
-      # 14. Upload artifact per OS
-      - name: Upload build artifact
-        if: runner.os != 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: vpinfe-${{ runner.os }}
-          path: dist/
-
-      # 15. Build Linux slim variant (no bundled Chromium - uses system chromium)
+   
+      # 4. Build Linux slim variant (no bundled Chromium - uses system chromium)
       - name: Build slim app with PyInstaller (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -189,7 +52,7 @@ jobs:
           name: vpinfe-Linux-slim
           path: dist/
 
-      # 16. Build Windows slim variant (no bundled Chromium - uses system Chrome/Chromium)
+      # 5. Build Windows slim variant (no bundled Chromium - uses system Chrome/Chromium)
       - name: Build slim app with PyInstaller (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -211,7 +74,7 @@ jobs:
           name: vpinfe-Windows-slim
           path: dist/
 
-      # 17. Build macOS slim variant (no bundled Chromium - uses system Chrome/Chromium)
+      # 6. Build macOS slim variant (no bundled Chromium - uses system Chrome/Chromium)
       - name: Build slim app with PyInstaller (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -223,7 +86,7 @@ jobs:
            #remove build directory
           rm -rf dist/vpinfe
         shell: bash
-      #18. Ad-hoc sign the app bundle
+      #7. Ad-hoc sign the app bundle
       #    This prevents the "app is damaged" error and satisfies basic structural
       #    signing requirements. Users will still need to allow the app via
       #    System Settings > Privacy & Security > "Open Anyway" on first launch.
@@ -235,14 +98,14 @@ jobs:
           codesign --verify --verbose dist/VPinFE.app
         shell: bash
 
-      #19. Remove extended attributes from the artifact before packaging
+      #8. Remove extended attributes from the artifact before packaging
       - name: Remove extended attributes (macOS Slim)
         if: runner.os == 'macOS'
         run: |
           sudo xattr -rc dist
           echo "xattr exit code: $?"
         shell: bash
-      #20. Create DMG
+      #9. Create DMG
       - name: Package as DMG (macOS Slim)
         if: runner.os == 'macOS'
         run: |
@@ -258,7 +121,7 @@ jobs:
             "dist/VPinFE.dmg" \
             "dist/VPinFE.app"
         shell: bash
-       #21 Upload artifact
+       #10 Upload artifact
       - name: Upload slim build artifact (macOS)
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
