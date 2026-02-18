@@ -105,7 +105,14 @@ jobs:
           sudo xattr -rc dist
           echo "xattr exit code: $?"
         shell: bash
+        
       #9. Create DMG
+      - name: Install create-dmg
+        if: runner.os == 'macOS'
+        run: brew install create-dmg
+        shell: bash
+                
+      #10. Create DMG
       - name: Package as DMG (macOS Slim)
         if: runner.os == 'macOS'
         run: |
@@ -121,7 +128,7 @@ jobs:
             "dist/VPinFE.dmg" \
             "dist/VPinFE.app"
         shell: bash
-       #10 Upload artifact
+       #11 Upload artifact
       - name: Upload slim build artifact (macOS)
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
