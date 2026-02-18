@@ -10,6 +10,43 @@ CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 INI_PATH = CONFIG_DIR / 'vpinfe.ini'
 COLLECTIONS_PATH = CONFIG_DIR / 'collections.ini'
 
+# --- Friendly Name Mapping ---
+SETTINGS_LABELS = {
+    # [Settings] - Paths
+    'vpxbinpath': 'VPX Executable Path',
+    'vpximagepath': 'VPX Screenshots Dir',
+    'vpxinipath' : 'VPX Ini Path',
+    'tablerootdir': 'Tables Directory',
+    'romrootdir': 'ROMs Directory',
+    'pinmamepath': 'PinMAME Directory',
+    'img_dir': 'Frontend Media Dir',
+    'alt_exe': 'Alternate Launcher Exe',
+    'vpx_args': 'VPX Launch Arguments',
+    
+    # [Settings] - Options
+    'startup_collection': 'Startup Collection',
+    'theme': 'Active Theme',
+    'loglevel': 'Log Verbosity',
+    
+    # [Displays]
+    'display': 'Playfield Monitor Index',
+    'rotation': 'Playfield Rotation (0/90/270)',
+    'backglass_display': 'Backglass Monitor Index',
+    'dmd_display': 'DMD Monitor Index',
+    'tableorientation': 'Table Orientation',
+    
+    # [Network]
+    'port': 'Web Server Port',
+    'manageruiport': 'Manager UI Port',
+    'themeassetsport': 'Theme Assets Port',
+}
+
+def get_label(key: str) -> str:
+    """Returns the friendly label if defined, otherwise formats the key."""
+    if key in SETTINGS_LABELS:
+        return SETTINGS_LABELS[key]
+    # Fallback: "some_key_name" -> "Some Key Name"
+    return key.replace('_', ' ').replace('-', ' ').title()
 
 def _get_collection_names():
     """Get list of collection names for the dropdown."""
@@ -119,40 +156,69 @@ def render_panel(tab=None):
                     inputs[section] = {}
 
                     with ui.card().classes('config-card p-4 w-full'):
-                        options = config.config.options(section)
+                        # FIX: Use .items() to get (key, value) tuples directly.
+                        # This avoids the "list indices must be integers" error.
+                        section_items = config.config.items(section)
 
                         with ui.column().classes('gap-3'):
-                            for key in options:
-                                value = config.config.get(section, key, fallback='')
+                            for key, value in section_items:
+                                
+                                friendly_label = get_label(key)  # Get our new friendly name
 
-                                # Special handling for startup_collection in Settings
-                                if section == 'Settings' and key == 'startup_collection':
-                                    collection_options = _get_collection_names()
-                                    # Ensure current value is in options
-                                    if value and value not in collection_options:
-                                        collection_options.append(value)
-                                    inp = ui.select(
-                                        label=key,
-                                        options=collection_options,
-                                        value=value
-                                    ).classes('config-input').style('min-width: 200px;')
-                                # Special handling for theme in Settings
-                                elif section == 'Settings' and key == 'theme':
-                                    theme_options = _get_installed_theme_names()
-                                    if value and value not in theme_options:
-                                        theme_options.append(value)
-                                    inp = ui.select(
-                                        label=key,
-                                        options=theme_options,
-                                        value=value
-                                    ).classes('config-input').style('min-width: 200px;')
-                                else:
-                                    # Calculate width: 10% bigger than content, minimum 100px
-                                    char_width = max(len(value), len(key), 5)  # at least 5 chars
-                                    width_px = int(char_width * 10 * 1.1)  # ~10px per char, +10%
-                                    width_px = max(width_px, 100)  # minimum 100px
-                                    inp = ui.input(key, value=value).classes('config-input').style(f'width: {width_px}px;')
-                                inputs[section][key] = inp
+                                # Determine if it's a boolean (true/false)
+                                bool_val = None
+                                is_bool = False
+                                str_val = str(value).lower() if value is not None else ""
+
+                                if str_val in ('true', 'yes', 'on', '1'):
+                                    bool_val = True
+                                    is_bool = True
+                                elif str_val in ('false', 'no', 'off', '0'):
+                                    bool_val = False
+                                    is_bool = True
+
+                                with ui.row().classes('w-full items-center justify-between no-wrap'):
+                                    
+                                    # 1. SWITCH (Boolean)
+                                    if is_bool:
+                                        inputs[section][key] = ui.switch(text=friendly_label, value=bool_val).classes('config-input')
+                                    
+                                    # 2. DROPDOWN (Startup Collection)
+                                    elif section == 'Settings' and key == 'startup_collection':
+                                        collection_options = _get_collection_names()
+                                        if value and value not in collection_options:
+                                            collection_options.append(value)
+                                        
+                                        inputs[section][key] = ui.select(
+                                            label=friendly_label, 
+                                            options=collection_options, 
+                                            value=value
+                                        ).classes('config-input').style('min-width: 200px;')
+                                    
+                                    # 3. DROPDOWN (Theme)
+                                    elif section == 'Settings' and key == 'theme':
+                                        theme_options = _get_installed_theme_names()
+                                        if value and value not in theme_options:
+                                            theme_options.append(value)
+                                        
+                                        inputs[section][key] = ui.select(
+                                            label=friendly_label,
+                                            options=theme_options,
+                                            value=value
+                                        ).classes('config-input').style('min-width: 200px;')
+
+                                    # 4. TEXT INPUT (Everything else)
+                                    else:
+                                        # Dynamic width calculation
+                                        val_len = len(str(value)) if value else 0
+                                        char_width = max(val_len, len(friendly_label), 5)
+                                        width_px = int(char_width * 10 * 1.1)
+                                        width_px = max(width_px, 100)
+                                        
+                                        inputs[section][key] = ui.input(
+                                            label=friendly_label, 
+                                            value=value
+                                        ).classes('config-input').style(f'width: {width_px}px;')
 
         # Save button
         with ui.row().classes('w-full justify-end mt-4'):
