@@ -106,7 +106,7 @@ jobs:
           echo "xattr exit code: $?"
         shell: bash
         
-      #9. Create DMG
+      #9. Install Create DMG
       - name: Install create-dmg
         if: runner.os == 'macOS'
         run: brew install create-dmg
