@@ -21,13 +21,13 @@ class VPSdb:
     vpsUrldb = "https://github.com/VirtualPinballSpreadsheet/vps-db/raw/refs/heads/main/db/vpsdb.json"
     vpinmdbUrl = "https://github.com/superhac/vpinmediadb/raw/refs/heads/main/vpinmdb.json"
 
-    _config_dir = Path(user_config_dir("vpinfe", "vpinfe"))
-    vpsdb_path = _config_dir / "vpsdb.json"
-
     def __init__(self, rootTableDir, vpinfeIniConfig):
         print("Initializing VPSdb")
 
         self._vpinfeIniConfig = vpinfeIniConfig
+        self._config_dir = Path(user_config_dir("vpinfe", "vpinfe"))
+        self._config_dir.mkdir(parents=True, exist_ok=True)
+        self._vpsdb_path = self._config_dir / "vpsdb.json"
         version = self.downloadLastUpdate()
 
         if version:
@@ -49,15 +49,15 @@ class VPSdb:
             self.rootTableDir = rootTableDir
 
             # Load database from local file
-            if self.fileExists(self.vpsdb_path):
+            if self._vpsdb_path.exists():
                 try:
-                    with open(self.vpsdb_path, 'r', encoding="utf-8") as file:
+                    with open(self._vpsdb_path, 'r', encoding="utf-8") as file:
                         self.data = json.load(file)
                         print(f"Total VPSdb entries: {len(self.data)}")
                 except json.JSONDecodeError:
-                    print("Invalid JSON format in vpsdb.json.")
+                    print(f"Invalid JSON format in {self._vpsdb_path}")
             else:
-                print("JSON file vpsdb.json not found.")
+                print(f"JSON file {self._vpsdb_path} not found.")
 
         # Setup preferences
         self.tabletype = self._vpinfeIniConfig.config['Media']["tabletype"].lower()
@@ -134,8 +134,7 @@ class VPSdb:
         try:
             response = requests.get(VPSdb.vpsUrldb)
             response.raise_for_status()
-            os.makedirs(self._config_dir, exist_ok=True)
-            with open(self.vpsdb_path, 'wb') as file:
+            with open(self._vpsdb_path, 'wb') as file:
                 file.write(response.content)
             print("Successfully downloaded vpsdb.json from VPSdb")
         except requests.RequestException as e:

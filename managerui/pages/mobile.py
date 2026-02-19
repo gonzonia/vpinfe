@@ -137,7 +137,7 @@ def _http_request(url, data=b'', method='POST', timeout=300, retries=3, conn=Non
                 raise
 
 
-def _send_table_to_device(host, port, table_dir_name, progress_cb=None, chunk_size=1048576, exclude_ini=True):
+def _send_table_to_device(host, port, table_dir_name, progress_cb=None, chunk_size=1048576):
     """Send all files in a table folder to the mobile device via its HTTP API.
 
     Protocol (Mongoose-based WebServer on mobile device):
@@ -157,19 +157,7 @@ def _send_table_to_device(host, port, table_dir_name, progress_cb=None, chunk_si
     all_files = []
     for dirpath, dirnames, filenames in os.walk(table_path):
         rel_dir = os.path.relpath(dirpath, tables_path)
-
-        # For efficient lookup of corresponding .vpx files
-        filenames_lower_set = {f.lower() for f in filenames}
-
         for fname in filenames:
-            # Exclude .ini files that have a matching .vpx file in the same directory
-            if exclude_ini and fname.lower().endswith('.ini'):
-                # Get the base name of the .ini file (without extension)
-                base_name = os.path.splitext(fname)[0]
-                # Check if a corresponding .vpx file exists in the same directory
-                if f'{base_name.lower()}.vpx' in filenames_lower_set:
-                    continue  # This is a table-specific .ini file, so exclude it
-
             full_path = os.path.join(dirpath, fname)
             file_size = os.path.getsize(full_path)
             all_files.append((rel_dir, fname, full_path, file_size))
@@ -387,12 +375,6 @@ def _build_web_send_panel():
             check_btn = ui.button('Check Device', icon='sync', on_click=lambda: check_device()) \
                 .props('dense outline').classes('text-white')
 
-    # Send Options
-    with ui.card().classes('w-full bg-gray-800 p-4 mb-4'):
-        ui.label('Send Options').classes('text-white font-bold mb-2')
-        exclude_ini_checkbox = ui.checkbox('Exclude {VPX_FILENAME}.ini files', value=True).props('dark')
-        ui.label("Prevents sending the table-specific configuration file, e.g. 'tablename.ini'.").classes('text-gray-400 text-xs ml-8 -mt-2')
-
     # Action bar: filter toggle + send selected
     with ui.row().classes('w-full items-center gap-4 mb-2'):
         filter_toggle = ui.button('Show Installed Only', icon='filter_list',
@@ -452,7 +434,7 @@ def _build_web_send_panel():
         except Exception as e:
             ui.notify(f'Could not connect: {e}', type='negative')
 
-    async def _send_single_table(host, port, name, exclude_ini):
+    async def _send_single_table(host, port, name):
         """Send a single table with progress dialog. Returns True on success."""
         # Progress dialog
         with ui.dialog() as dlg, ui.card().classes('bg-gray-800 p-6').style('min-width: 400px;'):
@@ -474,7 +456,7 @@ def _build_web_send_panel():
         def do_send():
             try:
                 cs = int(chunk_input.value.strip() or '1048576')
-                _send_table_to_device(host, port, name, progress_cb=progress_cb, chunk_size=cs, exclude_ini=exclude_ini)
+                _send_table_to_device(host, port, name, progress_cb=progress_cb, chunk_size=cs)
                 state['done'] = True
             except Exception as ex:
                 state['error'] = str(ex)
@@ -512,14 +494,13 @@ def _build_web_send_panel():
             ui.notify('Please enter IP and Port', type='warning')
             return
 
-        exclude_ini = exclude_ini_checkbox.value
         selected = list(panel_state['tbl'].selected)
         total = len(selected)
         success = 0
         for i, row in enumerate(selected):
             name = row['table_dir_name']
             ui.notify(f'Batch send: {i+1}/{total} - {name}', type='info')
-            ok = await _send_single_table(host, port, name, exclude_ini=exclude_ini)
+            ok = await _send_single_table(host, port, name)
             if ok:
                 success += 1
         ui.notify(f'Batch complete: {success}/{total} tables sent', type='positive')
@@ -572,8 +553,7 @@ def _build_web_send_panel():
                     ui.notify('Please enter IP and Port', type='warning')
                     return
 
-                exclude_ini = exclude_ini_checkbox.value
-                ok = await _send_single_table(host, port, name, exclude_ini=exclude_ini)
+                ok = await _send_single_table(host, port, name)
                 if ok:
                     ui.notify(f'Transfer complete! All files sent to {host}:{port}', type='positive')
                     await check_device()
