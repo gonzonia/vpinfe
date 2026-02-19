@@ -121,7 +121,7 @@ jobs:
             --volicon "icon/VPinFE.icns" \
             --background "icon/DMG_background.png" \
             --window-pos 200 120 \
-            --window-size 600 400 \
+            --window-size 610 475 \
             --icon-size 100 \
             --icon "VPinFE.app" 175 190 \
             --hide-extension "VPinFE.app" \
