@@ -33,7 +33,6 @@ class VPinFECore {
     // Network config
     this.themeAssetsPort = 8000; // default, will be updated from config
     this.managerUiPort = 8001; // default manager UI port
-    this.wsPort = 8002; // default WebSocket bridge port
 
     // Display config
     this.tableOrientation = 'landscape'; // default, will be updated from config
@@ -41,12 +40,6 @@ class VPinFECore {
 
     // Remote launch state tracking
     this.remoteLaunchActive = false;
-
-    // WebSocket bridge
-    this._ws = null;
-    this._pendingCalls = {}; // {callId: {resolve, reject}}
-    this._callIdCounter = 0;
-    this._windowName = new URLSearchParams(window.location.search).get('window') || 'unknown';
 
   }
 
@@ -57,9 +50,12 @@ class VPinFECore {
   init() {
     // Set up keyboard listener
     window.addEventListener('keydown', (e) => this.#onKeyDown(e));
-
-    // Connect to WebSocket bridge
-    this.#connectWebSocket();
+   
+    // Wait for pywebview then run all async init
+    window.addEventListener('pywebviewready', async () => {
+      await this.#onPyWebviewReady();  // Wait until everything is done
+      this._resolveReady();           // Now we're truly ready
+    });
   }
 
   // theme register for Input events - Only for the table screen!
@@ -88,19 +84,13 @@ class VPinFECore {
   }
 
   async call(method, ...args) {
-    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) {
-      throw new Error(`WebSocket not connected, cannot call ${method}`);
+    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api[method] === 'function') {
+      return await window.pywebview.api[method](...args);
+    } else {
+      const errMsg = `Method ${method} does not exist on window.pywebview.api`;
+      console.error(errMsg);
+      throw new Error(errMsg);
     }
-    const callId = String(++this._callIdCounter);
-    return new Promise((resolve, reject) => {
-      this._pendingCalls[callId] = { resolve, reject };
-      this._ws.send(JSON.stringify({
-        type: 'api_call',
-        id: callId,
-        method: method,
-        args: args
-      }));
-    });
   }
 
   // get table image url paths
@@ -193,7 +183,7 @@ class VPinFECore {
   }
 
   async getTableData(reset=false) {
-    this.tableData = JSON.parse(await this.call("get_tables", reset));
+    this.tableData = JSON.parse(await window.pywebview.api.get_tables(reset));
   }
 
   // Register an event handler for a specific event type
@@ -265,57 +255,8 @@ class VPinFECore {
   // private functions
   // **********************************************
 
-  #connectWebSocket() {
-    const wsUrl = `ws://127.0.0.1:${this.wsPort}?window=${this._windowName}`;
-    console.log(`[WS] Connecting to ${wsUrl}`);
-    this._ws = new WebSocket(wsUrl);
-
-    this._ws.onopen = async () => {
-      console.log("[WS] Connected to bridge");
-      await this.#onBridgeReady();
-      this._resolveReady();
-    };
-
-    this._ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'api_response') {
-        const pending = this._pendingCalls[data.id];
-        if (pending) {
-          delete this._pendingCalls[data.id];
-          if (data.error) {
-            pending.reject(new Error(data.error));
-          } else {
-            pending.resolve(data.result);
-          }
-        }
-      } else if (data.type === 'event') {
-        // Handle pushed events from Python
-        if (typeof window.receiveEvent === 'function') {
-          window.receiveEvent(data.message);
-        }
-        // Forward to iframes if requested
-        if (data.forward_iframe) {
-          const iframes = document.querySelectorAll('iframe');
-          iframes.forEach(iframe => {
-            try {
-              iframe.contentWindow.postMessage({ vpinfeEvent: data.message }, '*');
-            } catch (e) { /* cross-origin, ignore */ }
-          });
-        }
-      }
-    };
-
-    this._ws.onclose = () => {
-      console.log("[WS] Disconnected from bridge");
-    };
-
-    this._ws.onerror = (err) => {
-      console.error("[WS] WebSocket error:", err);
-    };
-  }
-
-  async #onBridgeReady() {
-    console.log("WebSocket bridge is ready!");
+  async #onPyWebviewReady() {
+    console.log("pywebview is ready!");
     // Load network config
     this.themeAssetsPort = await this.call("get_theme_assets_port");
     // Load display config
@@ -326,7 +267,7 @@ class VPinFECore {
    //this.#overrideConsole(); //disabled for now...
 
     // only run on the table window.. Its the master controller for all screens/windows
-    if (await this.call("get_my_window_name") == "table") {
+    if (await vpin.call("get_my_window_name") == "table") {
       await this.#initGamepadMapping();
       this.#setupGamepadListeners();
       this.#updateGamepads();           // No await needed here — runs loop
@@ -387,7 +328,7 @@ class VPinFECore {
   async #onKeyDown(e) {
     windowName = await this.call("get_my_window_name");
     if (windowName == "table") {
-      if (e.key === "Escape" || e.key === 'q') this.call("close_app");
+      if (e.key === "Escape" || e.key === 'q') window.pywebview.api.close_app();
       else if (e.key === 'ArrowLeft' || e.code === 'ShiftLeft') this.#triggerInputAction("joyleft");
       else if (e.key === 'ArrowRight' || e.code === 'ShiftRight') this.#triggerInputAction("joyright");
       else if (e.key === 'Enter') this.#triggerInputAction("joyselect");
@@ -397,7 +338,7 @@ class VPinFECore {
   }
 
   async #loadMonitors() {
-    this.monitors = await this.call("get_monitors");
+    this.monitors = await window.pywebview.api.get_monitors();
   }
 
   // Gamepad handling
@@ -424,7 +365,7 @@ async #onButtonPressed(buttonIndex, gamepadIndex) {
   for (const action of actions) {
     //this.call("console_out", `Button action: ${action}, windowName: ${windowName}`);
     if (action === "joyexit" && windowName == "table") {
-      this.call("close_app");
+      window.pywebview.api.close_app();
     }
     else if (action === "joymenu" && windowName == "table") {
       this.#showmenu();
@@ -470,9 +411,7 @@ async #onButtonPressed(buttonIndex, gamepadIndex) {
     if (!localPath || typeof localPath !== 'string') {
       return "/web/images/file_missing.png";  // fallback default
     }
-    // Normalize Windows backslashes to forward slashes
-    const normalized = localPath.replace(/\\/g, '/');
-    const parts = normalized.split('/');
+    const parts = localPath.split('/');
     const file = parts[parts.length - 1];    // last part = filename
     const port = this.themeAssetsPort;
 

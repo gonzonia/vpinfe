@@ -229,24 +229,24 @@ def _launch_table(vpx_path: str, table_name: str):
 
 def _restart_app():
     """Restart the VPinFE application by signaling main.py to re-exec itself."""
+    import webview
+
     ui.notify('Restarting VPinFE...', type='info')
 
     # Write a restart sentinel file that main.py checks after cleanup
     restart_flag = CONFIG_DIR / '.restart'
     restart_flag.touch()
 
-    # Terminate all Chromium windows to trigger clean shutdown
+    # Close all webview windows to trigger clean shutdown
     # main.py will detect the sentinel and os.execvp itself
-    # NOTE: Use sys.modules['__main__'] because main.py runs as __main__,
-    # and "import main" would re-execute the entire module (rebinding ports, etc.)
-    main_module = sys.modules['__main__']
-    chromium_mgr = getattr(main_module, 'chromium_manager', None)
-    if chromium_mgr:
-        chromium_mgr.terminate_all()
+    for window in webview.windows:
+        window.destroy()
 
 
 def _shutdown_system():
     """Shutdown the system (cross-platform)."""
+    import webview
+
     ui.notify('Shutting down system...', type='warning')
 
     # Issue shutdown command based on platform (before closing windows)
@@ -259,16 +259,16 @@ def _shutdown_system():
     else:
         # Linux: use systemctl with -i flag to ignore inhibitors (like GNOME session)
         subprocess.Popen(["systemctl", "poweroff", "-i"])
-
-    # Terminate Chromium windows after issuing shutdown
-    main_module = sys.modules['__main__']
-    chromium_mgr = getattr(main_module, 'chromium_manager', None)
-    if chromium_mgr:
-        chromium_mgr.terminate_all()
+       
+    # Close VPinFE windows after issuing shutdown
+    for window in webview.windows:
+        window.destroy()
 
 
 def _reboot_system():
     """Reboot the system (cross-platform)."""
+    import webview
+
     ui.notify('Rebooting system...', type='warning')
 
     # Issue reboot command based on platform (before closing windows)
@@ -282,11 +282,9 @@ def _reboot_system():
         # Linux: use systemctl reboot
         subprocess.Popen(['systemctl', 'reboot'])
 
-    # Terminate Chromium windows after issuing reboot
-    main_module = sys.modules['__main__']
-    chromium_mgr = getattr(main_module, 'chromium_manager', None)
-    if chromium_mgr:
-        chromium_mgr.terminate_all()
+    # Close VPinFE windows after issuing reboot
+    for window in webview.windows:
+        window.destroy()
 
 
 def _show_reboot_confirmation():
